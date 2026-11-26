@@ -1,0 +1,51 @@
+# lefthook.yml — Git hooks for a Terraform repository
+# Install:  lefthook install
+# Tools:    terraform, tflint, trivy, gitleaks, terraform-docs (optional)
+# Skip once: LEFTHOOK=0 git commit ...   |   skip one hook: LEFTHOOK_EXCLUDE=validate git push
+ 
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.{tf,tfvars}"
+      run: terraform fmt {staged_files}
+      stage_fixed: true            # re-stage files fmt rewrote
+ 
+    tflint:
+      glob: "*.tf"
+      run: |
+        tflint --init >/dev/null
+        tflint --recursive --format compact
+ 
+    secrets:
+      run: gitleaks git --pre-commit --staged --redact --no-banner
+ 
+    docs:
+      # Keeps module READMEs in sync (needs <!-- BEGIN_TF_DOCS --> markers in README.md)
+      glob: "modules/**/*.tf"
+      run: |
+        for dir in $(dirname {staged_files} | sort -u); do
+          terraform-docs markdown table --output-file README.md --output-mode inject "$dir"
+        done
+      stage_fixed: true
+ 
+pre-push:
+  parallel: false
+  commands:
+    fmt-check:
+      glob: "*.{tf,tfvars}"
+      run: terraform fmt -check -recursive -diff
+ 
+    validate:
+      glob: "*.tf"
+      run: |
+        for dir in $(git ls-files '*.tf' | xargs -n1 dirname | sort -u); do
+          echo "→ validating $dir"
+          terraform -chdir="$dir" init -backend=false -input=false -no-color >/dev/null || exit 1
+          terraform -chdir="$dir" validate -no-color || exit 1
+        done
+ 
+    security:
+      glob: "*.tf"
+      run: trivy config --exit-code 1 --severity HIGH,CRITICAL --quiet .
+ 
